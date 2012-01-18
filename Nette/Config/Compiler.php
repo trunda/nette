@@ -130,7 +130,7 @@ class Compiler extends Nette\Object
 		$this->parseServices($this->container, $this->config);
 
 		foreach ($this->extensions as $name => $extension) {
-			$this->container->addDefinition($name)
+			$this->container->addNestedDefinition($name)
 				->setClass('Nette\DI\NestedAccessor', array('@container', $name));
 
 			if (isset($this->config[$name])) {
@@ -157,14 +157,14 @@ class Compiler extends Nette\Object
 			$extension->beforeCompile();
 		}
 
-		$class = $this->container->generateClass($parentName);
-		$class->setName($className)
+		$classList = $this->container->generateClassList($parentName);
+		$classList[0]->setName($className)
 			->addMethod('initialize');
 
 		foreach ($this->extensions as $extension) {
-			$extension->afterCompile($class);
+			$extension->afterCompile($classList[0]);
 		}
-		return (string) $class;
+		return (string) $classList;
 	}
 
 

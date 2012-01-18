@@ -29,7 +29,8 @@ use Nette,
 class ContainerBuilder extends Nette\Object
 {
 	const CREATED_SERVICE = 'self',
-		THIS_CONTAINER = 'container';
+		THIS_CONTAINER = 'container',
+        NESTEDCLASS_PREFIX = 'NestedAccessor_';
 
 	/** @var array  %param% will be expanded */
 	public $parameters = array();
@@ -43,6 +44,8 @@ class ContainerBuilder extends Nette\Object
 	/** @var array of file names */
 	private $dependencies = array();
 
+	/** @var array */
+	private $nestedDefinitions = array();
 
 
 	/**
@@ -58,6 +61,14 @@ class ContainerBuilder extends Nette\Object
 		return $this->definitions[$name] = new ServiceDefinition;
 	}
 
+	
+	public function addNestedDefinition($name)
+    {
+        if (isset($this->nestedDefinitions[$name])) {
+			throw new Nette\InvalidStateException("Service '$name' has already been added.");
+		}        
+        return $this->nestedDefinitions[$name] = new ServiceDefinition;
+    }
 
 
 	/**
@@ -184,6 +195,16 @@ class ContainerBuilder extends Nette\Object
 	 */
 	public function prepareClassList()
 	{
+		foreach ($this->nestedDefinitions as $name => $def) {
+            $class = self::NESTEDCLASS_PREFIX . $name;
+            if (!$this->hasDefinition($name)) {
+                $this->addDefinition($name)
+                        ->setClass($class)
+                        ->setFactory($class, $def->factory->arguments);
+            } else {
+                unset($this->nestedDefinitions[$name]);
+            }
+        }
 		// complete class-factory pairs; expand classes
 		foreach ($this->definitions as $name => $def) {
 			if ($def->class) {
@@ -208,7 +229,8 @@ class ContainerBuilder extends Nette\Object
 		//  build auto-wiring list
 		$this->classes = array();
 		foreach ($this->definitions as $name => $def) {
-			if (!$def->class) {
+			if (!$def->class || 
+                    substr($def->class, 0, strlen(self::NESTEDCLASS_PREFIX)) === self::NESTEDCLASS_PREFIX) {
 				continue;
 			}
 			if (!class_exists($def->class) && !interface_exists($def->class)) {
@@ -313,16 +335,18 @@ class ContainerBuilder extends Nette\Object
 
 	/**
 	 * Generates PHP class.
-	 * @return Nette\Utils\PhpGenerator\ClassType
+	 * @return Nette\Utils\PhpGenerator\ClassList
 	 */
-	public function generateClass($parentClass = 'Nette\DI\Container')
+	public function generateClassList($parentClass = 'Nette\DI\Container')
 	{
 		unset($this->definitions[self::THIS_CONTAINER]);
 		$this->addDefinition(self::THIS_CONTAINER)->setClass($parentClass);
 
 		$this->prepareClassList();
 
-		$class = new Nette\Utils\PhpGenerator\ClassType('Container');
+		$classList = new Nette\Utils\PhpGenerator\ClassList;
+        
+        $classList[0] = $class = new Nette\Utils\PhpGenerator\ClassType('Container');
 		$class->addExtend($parentClass);
 		$class->addMethod('__construct')
 			->addBody('parent::__construct(?);', array($this->expand($this->parameters)));
@@ -348,15 +372,29 @@ class ContainerBuilder extends Nette\Object
 			}
 		}
 
+		foreach ($this->nestedDefinitions as $name => $def) {
+            $classList[$name] = $nestedClass = new Nette\Utils\PhpGenerator\ClassType($this->definitions[$name]->class);   
+            $nestedClass->addExtend($this->nestedDefinitions[$name]->class);            
+        }
+
 		foreach ($definitions as $name => $def) {
 			try {
+				$nested = preg_replace('/_([^_]+)$/', '', $name);                
+                $nestedClass = NULL;
+                if ($nested !== $name && isset($classList[$nested])) {
+                    $nestedClass = $classList[$nested];
+                }
 				$type = $def->class ?: 'object';
 				$sanitized = $this->sanitizeName($name);
 				if (!PhpHelpers::isIdentifier($sanitized)) {
 					throw new ServiceCreationException('Name contains invalid characters.');
 				}
 				if ($def->shared && $name === $sanitized) {
-					$class->addDocument("@property $type \$$name");
+					if ($nestedClass) {
+                        $nestedClass->addDocument("@property $type \$" . preg_replace("/{$nested}_/i", '', $name));
+                    } else {
+                        $class->addDocument("@property $type \$$name");                    
+                    }
 				}
 				$method = $class->addMethod(($def->shared ? 'createService' : 'create') . ucfirst($sanitized))
 					->addDocument("@return $type")
@@ -375,7 +413,7 @@ class ContainerBuilder extends Nette\Object
 			}
 		}
 
-		return $class;
+		return $classList;
 	}
 
 
@@ -446,6 +484,9 @@ class ContainerBuilder extends Nette\Object
 		} elseif ($entity === 'not') { // operator
 			return $this->formatPhp('!?', array($arguments[0]));
 
+		} elseif (is_string($entity) && 
+	                substr($entity, 0, strlen(self::NESTEDCLASS_PREFIX)) === self::NESTEDCLASS_PREFIX) {
+	        return $this->formatPhp("new $entity" . ($arguments ? '(?*)' : ''), array($arguments));
 		} elseif (is_string($entity)) { // class name
 			if ($constructor = Nette\Reflection\ClassType::from($entity)->getConstructor()) {
 				$this->addDependency($constructor->getFileName());

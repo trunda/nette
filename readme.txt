@@ -1,4 +1,3 @@
-a
 Welcome to Nette Framework
 ==========================
 

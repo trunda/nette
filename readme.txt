@@ -1,4 +1,4 @@
-aWelcome to Nette Framework
+Welcome to Nette Framework
 ==========================
 
 Nette Framework is a powerful, component-based and event-driven framework
